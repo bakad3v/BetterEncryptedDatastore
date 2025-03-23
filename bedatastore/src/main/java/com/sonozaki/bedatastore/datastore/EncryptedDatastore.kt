@@ -17,20 +17,28 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 
+/**
+ * Encrypted Datastore. Implements [DataStore] interface and add encryption and caching. Cache is overridden with empty value when no one subscribed to data flow.
+ */
 internal class EncryptedDatastore<T>(
     private val baseDatastore: DataStore<ByteArray>,
     private val encryptedSerializer: EncryptedSerializer<T>,
     private val coroutineContext: CoroutineContext
 ): DataStore<T> {
 
+    /**
+     * Cache for unencrypted data.
+     */
     private val cachedFlow = MutableStateFlow<EncryptedData<T>>(EncryptedData.EmptyResult())
 
     private val mutex = Mutex()
 
     private val mutex1 = Mutex()
 
+
     @OptIn(ExperimentalCoroutinesApi::class)
     override val data: Flow<T> = cachedFlow
+        //load new data when someone subscribed and cache is empty
         .onSubscription {
             cachedFlow.getAndUpdate {
                 withContext(coroutineContext) {
@@ -44,6 +52,7 @@ internal class EncryptedDatastore<T>(
                 }
             }
         }
+        //override cache with empty value when no subscribers left
         .onCompletion {
             if (cachedFlow.subscriptionCount.value == 0) {
                 cachedFlow.emit(EncryptedData.EmptyResult())
@@ -54,12 +63,18 @@ internal class EncryptedDatastore<T>(
             (it as EncryptedData.Result).data
         }
 
+    /**
+     * load and decrypt data from base DataStore
+     */
     private suspend fun getInitialData(): T = mutex1.withLock {
         val encryptedData = baseDatastore.data.first()
         return encryptedSerializer.decryptAndDeserialize(encryptedData)
     }
 
 
+    /**
+     * Transform data and write new data to the file and to the cache. Load data if no data present in the cache.
+    */
     override suspend fun updateData(transform: suspend (t: T) -> T): T = mutex.withLock {
         withContext(coroutineContext) {
             val previous = cachedFlow.value

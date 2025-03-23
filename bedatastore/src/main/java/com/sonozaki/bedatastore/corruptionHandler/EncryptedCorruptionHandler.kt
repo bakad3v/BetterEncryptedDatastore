@@ -5,6 +5,9 @@ import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import com.sonozaki.bedatastore.encryption.EncryptedSerializer
 import kotlinx.coroutines.runBlocking
 
+/**
+ * Function for creating encrypted wrapper for corruption handler.
+ */
 internal fun <T> encryptedCorruptionHandler(
     baseHandler: ReplaceFileCorruptionHandler<T>?,
     encryptedSerializer: EncryptedSerializer<T>

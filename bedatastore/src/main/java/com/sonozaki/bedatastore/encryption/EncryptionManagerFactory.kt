@@ -2,6 +2,9 @@ package com.sonozaki.bedatastore.encryption
 
 import androidx.annotation.GuardedBy
 
+/**
+ * Factory for providing singleton instance of [EncryptionManager]
+ */
 internal object EncryptionManagerFactory {
     private val lock = Any()
 

@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.datastore.core.DataMigration
 import com.sonozaki.bedatastore.encryption.EncryptedSerializer
 
+/**
+ * Wrapper for [DataMigration] with encryption support
+ */
 internal class EncryptedMigration<T> internal constructor(
     private val baseMigration: DataMigration<T>,
     private val encryptedSerializer: EncryptedSerializer<T>, ): DataMigration<ByteArray> {

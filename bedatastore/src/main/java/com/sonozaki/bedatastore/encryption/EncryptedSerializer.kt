@@ -3,6 +3,9 @@ package com.sonozaki.bedatastore.encryption
 import androidx.datastore.core.Serializer
 import java.io.ByteArrayOutputStream
 
+/**
+ * Class for data serialization and encryption
+ */
 internal class EncryptedSerializer<T>(
     private val encryptionManager: EncryptionManager,
     private val serializer: Serializer<T>,

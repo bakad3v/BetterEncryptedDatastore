@@ -6,6 +6,9 @@ import kotlinx.coroutines.runBlocking
 import java.io.InputStream
 import java.io.OutputStream
 
+/**
+ * "Serializer" for base datastore. Doesn't serialize anything in fact.
+ */
 internal class ByteArraySerializer<T>(
     private val default: T,
     private val encryptedSerializer: EncryptedSerializer<T>, ): Serializer<ByteArray> {
