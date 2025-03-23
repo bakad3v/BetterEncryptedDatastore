@@ -29,7 +29,7 @@ Better Encrypted Datastore prevents upstream data leakage, but cannot prevent do
 ## Usage
 You can use Better Encrypted DataStore as usual DataStore. Just add this to your build.gradle:
 
-`implementation 'com.github.bakad3v:bedatastore:1.0.0-alpha'`
+`implementation 'com.github.bakad3v:BetterEncryptedDatastore:1.0.0-alpha'`
 
 And use extension function encryptedDataStore as the usual Datastore.
 
@@ -39,6 +39,7 @@ val data = context.exampleDatastore.data`
 You can also specify additional parameters:
 
 alias - encryption alias. By default - the name of the Datastore file.
+
 isDBA: Boolean - is Datastore file stored in device protected storage. By default - false.
 
 If you want to store unencrypted data in device protected storage, you can use another extension function dataStoreDBA.
