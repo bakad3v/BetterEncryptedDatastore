@@ -58,6 +58,25 @@ This library is used for storing data in my open-source app [Android Antiforensi
 
 The adapted test files identify their upstream sources and retain the [AndroidX license](bedatastore/src/test/ANDROIDX-LICENSE).
 
+### Performance benchmarks
+
+Run on a physical Android device with `./gradlew :benchmark:connectedReleaseAndroidTest`.
+The suite compares `DataStoreBenchmark` (the public encrypted delegate with Android Keystore)
+with `AndroidXDataStoreBenchmark` (stock AndroidX DataStore with `OkioStorage`). Both use the same
+serializer, payloads, storage directory, and coroutine dispatcher. Each scenario runs with
+payloads of 64 B, 4 KiB, 64 KiB, and 1 MiB:
+
+- `coldRead` measures `data.first()` on a fresh DataStore instance with an existing file. The OS file cache is left in place.
+- `warmReadWithoutCollectors` measures one-shot reads after priming the AndroidX cache. That cache holds ciphertext for the encrypted delegate and the decoded value for stock AndroidX.
+- `hotReadWithCollector` measures one-shot reads with a separate active collector. For the encrypted delegate, the collector keeps the decrypted value cached.
+- `updateAndCommit` alternates between two equal-size values and measures `updateData` through the file commit, with no active collectors.
+
+File seeding, payload generation, store setup and shutdown, and result checks run outside the
+timed section. The JSON report in `benchmark/build/outputs/connected_android_test_additional_output/`
+includes timing samples and device details. Compare results on the same device and build type.
+To run only stock AndroidX, add
+`-Pandroid.testInstrumentationRunnerArguments.class=com.sonozaki.bedatastore.benchmark.AndroidXDataStoreBenchmark`.
+
 ## Donate
 You can support me using crypto.
 
