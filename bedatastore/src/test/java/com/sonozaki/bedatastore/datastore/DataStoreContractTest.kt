@@ -206,5 +206,24 @@ class DataStoreContractTest {
         assertEquals(3, store.updateData { 3 })
     }
 
+    @Test
+    fun nestedUpdatesAllowAnotherStoreButRejectReturningToTheFirst() = runTest {
+        val first = newFixture().open(this).dataStore
+        val second = EncryptedStoreFixture(files.root.resolve("second.store")).open(this).dataStore
+
+        assertEquals(1, first.updateData {
+            assertEquals(2, second.updateData {
+                val failure = expectFailure<IllegalStateException> {
+                    withTimeout(1_000) { first.updateData { 3 } }
+                }
+                assertFalse("Nested updateData blocked until the timeout", failure is TimeoutCancellationException)
+                2
+            })
+            1
+        })
+        assertEquals(1, first.data.first())
+        assertEquals(2, second.data.first())
+    }
+
     private fun newFixture() = EncryptedStoreFixture(files.root.resolve("contract.store"))
 }

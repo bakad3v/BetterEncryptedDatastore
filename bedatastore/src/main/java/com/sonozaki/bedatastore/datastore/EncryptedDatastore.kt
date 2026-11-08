@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import com.sonozaki.bedatastore.encryption.EncryptedSerializer
 import com.sonozaki.bedatastore.entities.EncryptedData
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -75,24 +77,43 @@ internal class EncryptedDatastore<T>(
     /**
      * Transform data and write new data to the file and to the cache. Load data if no data present in the cache.
     */
-    override suspend fun updateData(transform: suspend (t: T) -> T): T = mutex.withLock {
-        withContext(coroutineContext) {
-            val previous = cachedFlow.value
-            val data = when (previous) {
-                is EncryptedData.Result -> {
-                    previous.data
-                }
-                is EncryptedData.EmptyResult -> {
-                    getInitialData()
-                }
-            }
-            val newData = transform(data)
-            if (newData == data) {
-                return@withContext data
-            }
-            baseDatastore.updateData { encryptedSerializer.serializeAndEncrypt(newData) }
-            cachedFlow.emit(EncryptedData.Result(newData))
-            return@withContext newData
+    override suspend fun updateData(transform: suspend (t: T) -> T): T {
+        // A transform runs while its store holds the mutex. Check before locking so a
+        // nested call cannot wait on itself, even if it reaches this store through another one.
+        val parentUpdate = currentCoroutineContext()[UpdateContext]
+        check(parentUpdate?.contains(this) != true) {
+            "Cannot call updateData on the same DataStore from within its updateData transform."
         }
+
+        return mutex.withLock {
+            withContext(coroutineContext + UpdateContext(this, parentUpdate)) {
+                val previous = cachedFlow.value
+                val data = when (previous) {
+                    is EncryptedData.Result -> {
+                        previous.data
+                    }
+                    is EncryptedData.EmptyResult -> {
+                        getInitialData()
+                    }
+                }
+                val newData = transform(data)
+                if (newData == data) {
+                    return@withContext data
+                }
+                baseDatastore.updateData { encryptedSerializer.serializeAndEncrypt(newData) }
+                cachedFlow.emit(EncryptedData.Result(newData))
+                return@withContext newData
+            }
+        }
+    }
+
+    private class UpdateContext(
+        private val store: EncryptedDatastore<*>,
+        private val parent: UpdateContext?,
+    ) : AbstractCoroutineContextElement(Key) {
+        fun contains(store: EncryptedDatastore<*>): Boolean =
+            generateSequence(this) { it.parent }.any { it.store === store }
+
+        companion object Key : CoroutineContext.Key<UpdateContext>
     }
 }
