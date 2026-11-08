@@ -38,7 +38,9 @@ val data = context.exampleDatastore.data`
 
 You can also specify additional parameters:
 
-alias - encryption alias. By default - the name of the Datastore file.
+alias - logical encryption alias. It defaults to the DataStore file name. New writes use AES-GCM
+with the Keystore alias `<alias>.bedatastore-gcm-v1`. Existing AES-CBC files use their original key
+and are readable. A write that changes their value saves it in the new format.
 
 isDBA: Boolean - is Datastore file stored in device protected storage. By default - false.
 

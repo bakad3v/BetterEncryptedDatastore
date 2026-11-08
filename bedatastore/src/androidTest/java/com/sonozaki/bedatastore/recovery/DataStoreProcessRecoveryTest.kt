@@ -12,6 +12,7 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.core.DataStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sonozaki.bedatastore.encryption.EncryptionManagerImpl.Companion.gcmKeyAlias
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +40,7 @@ class DataStoreProcessRecoveryTest {
     @After
     fun cleanUp() {
         files.directory.deleteRecursively()
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(files.alias)
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(gcmKeyAlias(files.alias))
     }
 
     // A dead writer leaves its scratch file behind. A fresh store should read the last

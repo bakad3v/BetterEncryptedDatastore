@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sonozaki.bedatastore.encryption.EncryptionManagerImpl.Companion.gcmKeyAlias
 import com.sonozaki.bedatastore.testutil.TestIntSerializer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +53,7 @@ class DataStoreDelegateTest {
     fun cleanUp() {
         deviceFile.delete()
         credentialFile.delete()
-        keyStore.deleteEntry(fileName)
+        keyStore.deleteEntry(gcmKeyAlias(fileName))
     }
 
     // Both delegates should work with only a filename and serializer. The same filename
@@ -69,7 +70,7 @@ class DataStoreDelegateTest {
 
         assertArrayEquals(intBytes(41), deviceFile.readBytes())
         assertFalse(intBytes(42).contentEquals(credentialFile.readBytes()))
-        assertTrue(keyStore.entryInstanceOf(fileName, KeyStore.SecretKeyEntry::class.java))
+        assertTrue(keyStore.entryInstanceOf(gcmKeyAlias(fileName), KeyStore.SecretKeyEntry::class.java))
         assertEquals(41, plain.data.first())
         assertEquals(42, encrypted.data.first())
     }
@@ -100,7 +101,7 @@ class DataStoreDelegateTest {
 
         assertEquals(1, cleanupCalls)
         assertFalse(credentialFile.exists())
-        assertFalse(keyStore.containsAlias(fileName))
+        assertFalse(keyStore.containsAlias(gcmKeyAlias(fileName)))
         withStoreScope { scope -> assertEquals(42, plainStore(scope).data.first()) }
     }
 

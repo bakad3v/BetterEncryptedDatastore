@@ -23,6 +23,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.core.Serializer
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sonozaki.bedatastore.encryption.EncryptionManagerImpl.Companion.gcmKeyAlias
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,9 +44,9 @@ import org.junit.runner.RunWith
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.util.UUID
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 
@@ -66,6 +67,7 @@ class AndroidKeystoreDataStoreTest {
         context.dataStoreFile(fileName, false).delete()
         context.dataStoreFile(fileName, true).delete()
         keyStore.deleteEntry(alias)
+        keyStore.deleteEntry(gcmKeyAlias(alias))
     }
 
     // Check the full path from the public delegate to disk. The file should hide the value,
@@ -78,7 +80,7 @@ class AndroidKeystoreDataStoreTest {
 
         val persisted = context.dataStoreFile(fileName, false).readBytes()
         assertFalse(persisted.toString(Charsets.ISO_8859_1).contains(secret))
-        val key = requireNotNull(keyStore.getKey(alias, null))
+        val key = requireNotNull(keyStore.getKey(gcmKeyAlias(alias), null))
         assertEquals("AES", key.algorithm)
         assertNull("Android Keystore keys must not expose raw key bytes", key.encoded)
 
@@ -165,7 +167,20 @@ class AndroidKeystoreDataStoreTest {
         file.parentFile?.mkdirs()
         file.writeBytes(legacyFile)
 
-        assertEquals(legacyValue, open().data.first())
+        val store = open()
+        assertEquals(legacyValue, store.data.first())
+        val updatedValue = "updated legacy data!"
+        assertEquals(updatedValue, store.updateData { updatedValue })
+        closeLatest()
+        assertEquals(updatedValue, open().data.first())
+        closeLatest()
+
+        val tampered = file.readBytes()
+        tampered[0] = 16 // Try to select the old format while its key still exists.
+        file.writeBytes(tampered)
+        val error = runCatching { open().data.first() }.exceptionOrNull()
+        assertTrue("Expected the legacy format check to reject the edited header, got $error", error is IOException)
+        assertArrayEquals(tampered, file.readBytes())
     }
 
     // Encryption also needs to protect against changes to the file. Modify a newly saved
@@ -176,15 +191,14 @@ class AndroidKeystoreDataStoreTest {
         closeLatest()
         val file = context.dataStoreFile(fileName, false)
         val tampered = file.readBytes()
-        // In the CBC format this flips the first byte of the IV, changing plaintext without
-        // touching the padding. New writes must detect tampering before returning a value.
+        // Flip the byte after the format marker without changing the length or the format.
         tampered[1] = (tampered[1].toInt() xor 1).toByte()
         file.writeBytes(tampered)
 
         val error = runCatching { open().data.first() }.exceptionOrNull()
         assertTrue(
-            "Expected a decryption or corruption failure, got $error",
-            error is GeneralSecurityException || error is IOException,
+            "Expected AES-GCM authentication to fail, got $error",
+            error is AEADBadTagException,
         )
         assertArrayEquals(tampered, file.readBytes())
     }
