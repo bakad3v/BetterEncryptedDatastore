@@ -1,11 +1,14 @@
 package com.sonozaki.bedatastore.datastore
 
 import com.sonozaki.bedatastore.testutil.EncryptedStoreFixture
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,6 +93,35 @@ class PlaintextCacheTest {
         // A fresh read must decrypt again if the write released its plaintext value.
         assertEquals(10, store.data.first())
         assertTrue("An unobserved update retained plaintext", fixture.encryption.decryptions > afterUpdate)
+    }
+
+    @Test
+    fun updateDoesNotRestorePlaintextAfterLastCollectorLeavesDuringCommit() = runTest {
+        val fixture = newFixture()
+        val store = fixture.open(this).dataStore
+        store.updateData { 10 }
+        val observed = CompletableDeferred<Int>()
+        val collector = backgroundScope.launch { store.data.collect { observed.complete(it) } }
+        assertEquals(10, observed.await())
+
+        val writeStarted = CompletableDeferred<Unit>()
+        val continueWrite = CompletableDeferred<Unit>()
+        fixture.serializer.beforeWrite = {
+            writeStarted.complete(Unit)
+            continueWrite.await()
+        }
+        val update = async { store.updateData { 11 } }
+        try {
+            withTimeout(1_000) { writeStarted.await() }
+            collector.cancelAndJoin()
+        } finally {
+            continueWrite.complete(Unit)
+        }
+        assertEquals(11, update.await())
+        val afterUpdate = fixture.encryption.decryptions
+
+        assertEquals(11, store.data.first())
+        assertTrue(fixture.encryption.decryptions > afterUpdate)
     }
 
     private fun newFixture() = EncryptedStoreFixture(files.root.resolve("cache.store"))

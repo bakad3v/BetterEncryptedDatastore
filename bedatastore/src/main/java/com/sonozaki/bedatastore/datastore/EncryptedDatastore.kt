@@ -4,18 +4,18 @@ import androidx.datastore.core.DataStore
 import com.sonozaki.bedatastore.encryption.EncryptedSerializer
 import com.sonozaki.bedatastore.entities.EncryptedData
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
@@ -33,58 +33,67 @@ internal class EncryptedDatastore<T>(
     private val coroutineContext: CoroutineContext
 ): DataStore<T> {
 
-    /**
-     * Cache for unencrypted data.
-     */
-    private val cachedFlow = MutableStateFlow<EncryptedData<T>>(EncryptedData.EmptyResult())
+    // Track the value and its readers together so a write cannot repopulate the cache
+    // after the last reader has cleared it.
+    private val cachedFlow = MutableStateFlow(CacheState<T>(EncryptedData.EmptyResult()))
 
     private val mutex = Mutex()
 
-    private val mutex1 = Mutex()
+    private val readMutex = Mutex()
 
     init {
         // StateFlow outlives the store's Job. Clear the plaintext and give collectors a
         // terminal value so they can finish without cancelling the collecting coroutine.
         coroutineContext[Job]?.invokeOnCompletion {
-            cachedFlow.value = EncryptedData.Closed
+            cachedFlow.update { it.copy(value = EncryptedData.Closed) }
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    override val data: Flow<T> = cachedFlow
-        //load new data when someone subscribed and cache is empty
-        .onSubscription {
+    override val data: Flow<T> = flow {
+        cachedFlow.update { it.copy(collectors = it.collectors + 1) }
+        try {
+            initializeCache()
+            emitAll(
+                cachedFlow.map { it.value }
+                    .takeWhile { it != EncryptedData.Closed }
+                    .distinctUntilChanged()
+                    .filterIsInstance<EncryptedData.Result<T>>()
+                    .map { it.data },
+            )
+        } finally {
             cachedFlow.update { current ->
-                if (current is EncryptedData.EmptyResult) {
-                    withContext(coroutineContext) {
-                        EncryptedData.Result(getInitialData())
-                    }
+                val collectors = current.collectors - 1
+                val value = if (collectors == 0 && current.value != EncryptedData.Closed) {
+                    EncryptedData.EmptyResult()
                 } else {
-                    current
+                    current.value
+                }
+                CacheState(value, collectors)
+            }
+        }
+    }
+
+    private suspend fun initializeCache() {
+        if (cachedFlow.value.value !is EncryptedData.EmptyResult) return
+
+        withContext(coroutineContext.minusKey(Job)) {
+            readMutex.withLock {
+                val beforeRead = cachedFlow.value.value
+                if (beforeRead is EncryptedData.EmptyResult) {
+                    val loaded = EncryptedData.Result(getInitialData())
+                    // A commit or store closure can publish a newer state while the read runs.
+                    cachedFlow.update { current ->
+                        if (current.value === beforeRead) current.copy(value = loaded) else current
+                    }
                 }
             }
         }
-        .takeWhile { it != EncryptedData.Closed }
-        //override cache with empty value when no subscribers left
-        .onCompletion {
-            if (cachedFlow.subscriptionCount.value == 0) {
-                replaceOpenCache(EncryptedData.EmptyResult())
-            }
-        }.filter {
-            it is EncryptedData.Result
-        }.map {
-            (it as EncryptedData.Result).data
-        }
-
-    private fun replaceOpenCache(value: EncryptedData<T>) {
-        // A write or the last collector's cleanup must never reopen the closed cache.
-        cachedFlow.update { current -> if (current == EncryptedData.Closed) current else value }
     }
 
     /**
      * load and decrypt data from base DataStore
      */
-    private suspend fun getInitialData(): T = mutex1.withLock {
+    private suspend fun getInitialData(): T {
         val encryptedData = baseDatastore.data.first()
         return encryptedSerializer.decryptAndDeserialize(encryptedData)
     }
@@ -109,9 +118,9 @@ internal class EncryptedDatastore<T>(
                 val storeCompletion = storeContext[Job]?.invokeOnCompletion { updateContext.cancel() }
                 try {
                     storeContext.ensureActive()
-                    val data = when (val previous = cachedFlow.value) {
+                    val data = when (val previous = cachedFlow.value.value) {
                         is EncryptedData.Result -> previous.data
-                        is EncryptedData.EmptyResult -> getInitialData()
+                        is EncryptedData.EmptyResult -> readMutex.withLock { getInitialData() }
                         EncryptedData.Closed -> throw CancellationException("DataStore is closed")
                     }
                     val newData = transform(data)
@@ -125,7 +134,13 @@ internal class EncryptedDatastore<T>(
                             data
                         } else {
                             baseDatastore.updateData { encryptedSerializer.serializeAndEncrypt(newData) }
-                            replaceOpenCache(EncryptedData.Result(newData))
+                            cachedFlow.update { current ->
+                                if (current.collectors > 0 && current.value != EncryptedData.Closed) {
+                                    current.copy(value = EncryptedData.Result(newData))
+                                } else {
+                                    current
+                                }
+                            }
                             newData
                         }
                     }
@@ -135,6 +150,8 @@ internal class EncryptedDatastore<T>(
             }
         }
     }
+
+    private data class CacheState<T>(val value: EncryptedData<T>, val collectors: Int = 0)
 
     private class UpdateContext(
         private val store: EncryptedDatastore<*>,
