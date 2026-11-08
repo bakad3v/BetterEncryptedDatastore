@@ -26,6 +26,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -218,6 +219,8 @@ class DataStoreContractTest {
             true
         }
         assertEquals("A collector remained active after the store closed", true, finished)
+        assertFalse("Closing the store cancelled the collector's coroutine", collector.isCancelled)
+        assertEquals(emptyList<Int>(), withTimeout(1_000) { opened.dataStore.data.toList() })
     }
 
     // A transform that updates the same store would wait for itself. The inner call should

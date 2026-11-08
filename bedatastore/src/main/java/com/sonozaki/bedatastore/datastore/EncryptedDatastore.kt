@@ -3,6 +3,7 @@ package com.sonozaki.bedatastore.datastore
 import androidx.datastore.core.DataStore
 import com.sonozaki.bedatastore.encryption.EncryptedSerializer
 import com.sonozaki.bedatastore.entities.EncryptedData
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -12,10 +13,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -40,33 +42,44 @@ internal class EncryptedDatastore<T>(
 
     private val mutex1 = Mutex()
 
+    init {
+        // StateFlow outlives the store's Job. Clear the plaintext and give collectors a
+        // terminal value so they can finish without cancelling the collecting coroutine.
+        coroutineContext[Job]?.invokeOnCompletion {
+            cachedFlow.value = EncryptedData.Closed
+        }
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override val data: Flow<T> = cachedFlow
         //load new data when someone subscribed and cache is empty
         .onSubscription {
-            cachedFlow.getAndUpdate {
-                withContext(coroutineContext) {
-                    when(it) {
-                        is EncryptedData.EmptyResult -> {
-                            val resultData = getInitialData()
-                            EncryptedData.Result(resultData)
-                        }
-                        is EncryptedData.Result -> it
+            cachedFlow.update { current ->
+                if (current is EncryptedData.EmptyResult) {
+                    withContext(coroutineContext) {
+                        EncryptedData.Result(getInitialData())
                     }
+                } else {
+                    current
                 }
             }
         }
+        .takeWhile { it != EncryptedData.Closed }
         //override cache with empty value when no subscribers left
         .onCompletion {
             if (cachedFlow.subscriptionCount.value == 0) {
-                cachedFlow.emit(EncryptedData.EmptyResult())
+                replaceOpenCache(EncryptedData.EmptyResult())
             }
         }.filter {
             it is EncryptedData.Result
         }.map {
             (it as EncryptedData.Result).data
         }
+
+    private fun replaceOpenCache(value: EncryptedData<T>) {
+        // A write or the last collector's cleanup must never reopen the closed cache.
+        cachedFlow.update { current -> if (current == EncryptedData.Closed) current else value }
+    }
 
     /**
      * load and decrypt data from base DataStore
@@ -99,6 +112,7 @@ internal class EncryptedDatastore<T>(
                     val data = when (val previous = cachedFlow.value) {
                         is EncryptedData.Result -> previous.data
                         is EncryptedData.EmptyResult -> getInitialData()
+                        EncryptedData.Closed -> throw CancellationException("DataStore is closed")
                     }
                     val newData = transform(data)
 
@@ -111,7 +125,7 @@ internal class EncryptedDatastore<T>(
                             data
                         } else {
                             baseDatastore.updateData { encryptedSerializer.serializeAndEncrypt(newData) }
-                            cachedFlow.emit(EncryptedData.Result(newData))
+                            replaceOpenCache(EncryptedData.Result(newData))
                             newData
                         }
                     }
