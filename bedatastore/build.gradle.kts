@@ -47,7 +47,7 @@ publishing {
         create("release", MavenPublication::class) {
             groupId = "com.github.bakad3v"
             artifactId = "bedatastore"
-            version = "1.1.0-alpha"
+            version = "1.1.3.0"
 
             afterEvaluate {
                 from(components["release"])
