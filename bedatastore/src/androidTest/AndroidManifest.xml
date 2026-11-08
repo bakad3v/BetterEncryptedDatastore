@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service
+            android:name="com.sonozaki.bedatastore.recovery.DataStoreCrashService"
+            android:exported="false"
+            android:process=":datastore_crash_test" />
+    </application>
+</manifest>

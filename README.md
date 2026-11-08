@@ -48,6 +48,14 @@ If you want to store unencrypted data in device protected storage, you can use a
 ## Examples
 This library is used for storing data in my open-source app [Android Antiforensic Tools](https://github.com/bakad3v/Android-AntiForensic-Tools).
 
+## Tests
+
+- `./gradlew :bedatastore:testDebugUnitTest` runs the adapted AndroidX DataStore 1.1.3 contract and migration scenarios, plus tests for cache lifetime and failure handling. The JVM suite uses real files and a test encryption provider.
+- `./gradlew :bedatastore:connectedDebugAndroidTest` runs the Android Keystore and process recovery tests on a connected device or emulator.
+- `./gradlew :bedatastore:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sonozaki.bedatastore.recovery.DataStoreProcessRecoveryTest` runs only the process recovery tests. They kill a worker in the test APK during reading, writing, or migration and verify the encrypted file from a fresh store while the device stays on. The JVM tests model storage faults separately with partial reads, failed writes, and truncated ciphertext.
+
+The adapted test files identify their upstream sources and retain the [AndroidX license](bedatastore/src/test/ANDROIDX-LICENSE).
+
 ## Donate
 You can support me using crypto.
 
