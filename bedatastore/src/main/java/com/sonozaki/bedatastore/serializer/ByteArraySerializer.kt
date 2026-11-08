@@ -17,11 +17,9 @@ internal class ByteArraySerializer<T>(
             encryptedSerializer.serializeAndEncrypt(default)
         }
 
-    override suspend fun readFrom(input: InputStream): ByteArray =  try {
-            input.readBytes()
-        } catch (e: Exception) {
-            defaultValue
-        }
+    // Storage supplies defaultValue when the file is absent. Propagate read errors so
+    // a later update cannot replace existing data based on a temporary fallback value.
+    override suspend fun readFrom(input: InputStream): ByteArray = input.readBytes()
 
     override suspend fun writeTo(t: ByteArray, output: OutputStream) {
             output.write(t)
