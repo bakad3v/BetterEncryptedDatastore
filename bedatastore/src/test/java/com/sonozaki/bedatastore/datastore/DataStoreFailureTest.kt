@@ -258,8 +258,15 @@ class DataStoreFailureTest {
         fixture.disk.commitFailure = failure
         val opened = fixture.open(this, corruptionHandler = ReplaceFileCorruptionHandler { 42 })
 
-        val thrown = expectFailure<IOException> { opened.dataStore.data.first() }
-        assertEquals(failure.message, thrown.message)
+        // AndroidX reports the original corruption and attaches the failed recovery write.
+        val thrown = expectFailure<CorruptionException> { opened.dataStore.data.first() }
+        // Coroutine stack trace recovery can put the original exception in the cause chain.
+        val recoveryWriteErrors = generateSequence<Throwable>(thrown) { it.cause }
+            .flatMap { it.suppressed.asSequence() }
+        assertTrue(
+            "Expected the recovery write error as a suppressed exception",
+            recoveryWriteErrors.any { it is IOException && it.message == failure.message },
+        )
         assertArrayEquals(invalid, fixture.file.readBytes())
 
         fixture.disk.commitFailure = null
