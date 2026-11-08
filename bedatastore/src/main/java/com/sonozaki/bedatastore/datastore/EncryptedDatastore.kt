@@ -4,7 +4,10 @@ import androidx.datastore.core.DataStore
 import com.sonozaki.bedatastore.encryption.EncryptedSerializer
 import com.sonozaki.bedatastore.entities.EncryptedData
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
@@ -85,24 +88,36 @@ internal class EncryptedDatastore<T>(
             "Cannot call updateData on the same DataStore from within its updateData transform."
         }
 
+        val storeContext = coroutineContext + UpdateContext(this, parentUpdate)
         return mutex.withLock {
-            withContext(coroutineContext + UpdateContext(this, parentUpdate)) {
-                val previous = cachedFlow.value
-                val data = when (previous) {
-                    is EncryptedData.Result -> {
-                        previous.data
+            withContext(storeContext.minusKey(Job)) {
+                val updateContext = currentCoroutineContext()
+                // Keep the caller's cancellation during preparation and stop it if the store closes.
+                val storeCompletion = storeContext[Job]?.invokeOnCompletion { updateContext.cancel() }
+                try {
+                    storeContext.ensureActive()
+                    val data = when (val previous = cachedFlow.value) {
+                        is EncryptedData.Result -> previous.data
+                        is EncryptedData.EmptyResult -> getInitialData()
                     }
-                    is EncryptedData.EmptyResult -> {
-                        getInitialData()
+                    val newData = transform(data)
+
+                    // Once handed off, the store finishes the write and cache update together.
+                    // A cancelled caller could otherwise stop waiting after the disk write started
+                    // and leave the plaintext cache stale.
+                    withContext(storeContext) {
+                        updateContext.ensureActive()
+                        if (newData == data) {
+                            data
+                        } else {
+                            baseDatastore.updateData { encryptedSerializer.serializeAndEncrypt(newData) }
+                            cachedFlow.emit(EncryptedData.Result(newData))
+                            newData
+                        }
                     }
+                } finally {
+                    storeCompletion?.dispose()
                 }
-                val newData = transform(data)
-                if (newData == data) {
-                    return@withContext data
-                }
-                baseDatastore.updateData { encryptedSerializer.serializeAndEncrypt(newData) }
-                cachedFlow.emit(EncryptedData.Result(newData))
-                return@withContext newData
             }
         }
     }

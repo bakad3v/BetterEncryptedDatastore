@@ -22,6 +22,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -167,6 +168,36 @@ class DataStoreContractTest {
         assertEquals("A cancelled transform committed a value", 0, store.data.first())
         assertTrue("The write outlived the coroutine that called updateData", stoppedWithCaller)
         assertEquals(1, store.updateData { it.inc() })
+    }
+
+    @Test
+    fun cancellingCallerDuringCommitKeepsDiskAndCacheInSync() = runTest {
+        val fixture = newFixture()
+        val opened = fixture.open(this)
+        val store = opened.dataStore
+        assertEquals(1, store.updateData { 1 })
+
+        val observed = Channel<Int>(Channel.UNLIMITED)
+        val collector = backgroundScope.launch { store.data.collect { observed.send(it) } }
+        assertEquals(1, observed.receive())
+
+        val writeStarted = CompletableDeferred<Unit>()
+        val continueWrite = CompletableDeferred<Unit>()
+        fixture.serializer.beforeWrite = {
+            writeStarted.complete(Unit)
+            continueWrite.await()
+        }
+        val update = launch { store.updateData { 2 } }
+        withTimeout(1_000) { writeStarted.await() }
+        update.cancel()
+        runCurrent()
+        continueWrite.complete(Unit)
+        update.join()
+
+        assertEquals(2, withTimeout(1_000) { observed.receive() })
+        collector.cancelAndJoin()
+        opened.close()
+        assertEquals(2, fixture.open(this).dataStore.data.first())
     }
 
     // Close the store after a collector receives its first value. This checks that shutdown

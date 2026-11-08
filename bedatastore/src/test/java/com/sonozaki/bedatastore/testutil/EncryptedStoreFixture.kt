@@ -79,6 +79,7 @@ internal class OpenStore(
 internal class TestIntSerializer : Serializer<Int> {
     override val defaultValue = 0
     var writeFailure: IOException? = null
+    var beforeWrite: suspend () -> Unit = {}
 
     override suspend fun readFrom(input: InputStream): Int = try {
         DataInputStream(input).readInt()
@@ -87,6 +88,7 @@ internal class TestIntSerializer : Serializer<Int> {
     }
 
     override suspend fun writeTo(t: Int, output: OutputStream) {
+        beforeWrite()
         DataOutputStream(output).writeInt(t)
         // Fail after producing bytes to catch partial writes leaking through the wrapper.
         writeFailure?.let { throw it }
