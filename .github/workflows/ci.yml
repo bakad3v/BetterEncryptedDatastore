@@ -1,17 +1,26 @@
 name: CI
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [master]
     types: [closed]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested version on JitPack when running on master
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+# For merged PRs, test the commit GitHub integrated into master, never the PR head.
+env:
+  CI_COMMIT: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
 jobs:
   build:
@@ -19,10 +28,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.publication.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.CI_COMMIT }}
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
@@ -38,6 +50,23 @@ jobs:
           :bedatastore:publishReleasePublicationToMavenLocal
           :app:assembleDebug :benchmark:assembleReleaseAndroidTest
           -Dmaven.repo.local="$RUNNER_TEMP/maven"
+
+      - name: Read the published version
+        id: publication
+        shell: bash
+        run: |
+          shopt -s nullglob
+          aars=("$RUNNER_TEMP"/maven/com/github/bakad3v/bedatastore/*/*.aar)
+          if (( ${#aars[@]} != 1 )); then
+            echo '::error::Expected one release AAR in the Maven publication.'
+            exit 1
+          fi
+          version=$(basename "$(dirname "${aars[0]}")")
+          if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.-]*$ ]] || ! git check-ref-format "refs/tags/$version"; then
+            echo '::error::The Maven publication version must be a valid JitPack tag.'
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload Maven publication
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -68,6 +97,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ env.CI_COMMIT }}
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
@@ -97,3 +127,49 @@ jobs:
         with:
           name: android-test-reports-api-${{ matrix.api-level }}
           path: bedatastore/build/outputs/androidTest-results/connected/
+
+  publish:
+    name: Publish on JitPack
+    needs: [build, android]
+    if: >-
+      github.event.pull_request.merged == true ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.publish)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    concurrency:
+      group: jitpack-release
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Tag the tested commit
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag_ref="refs/tags/$VERSION"
+          refs=$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$tag_ref" "$tag_ref^{}")
+          # Prefer the peeled commit for tags that were created as annotated tags.
+          existing_commit=$(awk -v ref="$tag_ref" '$2 == ref { sha = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled ? peeled : sha) }' <<< "$refs")
+          if [[ -n "$existing_commit" && "$existing_commit" != "$CI_COMMIT" ]]; then
+            echo "Version $VERSION already has a tag on $existing_commit. Bump the Maven version to publish a new commit."
+            exit 0
+          fi
+          if [[ -z "$existing_commit" ]]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$tag_ref" -f sha="$CI_COMMIT"
+          fi
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+
+      - name: Request and verify the JitPack publication
+        if: steps.tag.outputs.publish == 'true'
+        shell: bash
+        run: |
+          pom_url="https://jitpack.io/com/github/$GITHUB_REPOSITORY/$VERSION/${GITHUB_REPOSITORY#*/}-$VERSION.pom"
+          curl --fail --silent --show-error --location --max-time 60 \
+            --retry 12 --retry-all-errors --retry-delay 30 --retry-max-time 480 \
+            --output "$RUNNER_TEMP/jitpack.pom" "$pom_url"
+          grep -q '<project' "$RUNNER_TEMP/jitpack.pom"
+          printf 'JitPack publication: %s\n' "$pom_url" >> "$GITHUB_STEP_SUMMARY"
