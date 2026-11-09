@@ -1,6 +1,9 @@
 # Better Encrypted Datastore
 Better Encrypted Datastore adds encryption and optional device-protected storage to AndroidX DataStore 1.1.3. It exposes the `DataStore<T>` interface and requires Android 8.0 (API 26) or later.
 
+## Comparison with existing analogues
+Existing libraries for encrypting data inside a Datastore, such as [Encrypted DataStore](https://github.com/osipxd/encrypted-datastore), are limited to only encrypting the file where the data is stored. However, DataStore is designed in such a way that the data is stored in a cache in RAM after it is initially loaded from the file, rather than being read from the file each time the data is accessed. In existing libraries, the values in this cache are not encrypted. Furthermore, Datastore is implemented as a singleton, which means that this decrypted data will be in RAM the entire time the application is running.
+
 On screenshots below you can see that unencrypted data remains in RAM long time after user put application in background.
 
 ![Decoded Settings value in the heap](./images/encrypted_datastore_value.png)
