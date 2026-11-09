@@ -1,3 +1,5 @@
+import org.gradle.jvm.tasks.Jar
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -40,6 +42,11 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
+}
+
+// Android and Kotlin both include src/main/java in the published sources.
+tasks.withType<Jar>().matching { it.name == "releaseSourcesJar" }.configureEach {
+    eachFile { duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
 }
 
 publishing {

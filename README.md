@@ -1,5 +1,5 @@
 # Better Encrypted Datastore
-Better Encrypted Datastore is a library for securely storing encrypted data inside Datastore. It allows you to combine strong encryption with the convenience of reactive programming. In addition, the library extends Datastore's capabilities by adding the ability to store a Datastore file in device encrypted storage, making data from it accessible before the first device unlock. It's based on AndroidX Datastore v 1.1.3.
+Better Encrypted Datastore adds encryption and optional device-protected storage to AndroidX DataStore 1.1.3. It exposes the `DataStore<T>` interface and requires Android 8.0 (API 26) or later.
 
 On screenshots below you can see that unencrypted data remains in RAM long time after user put application in background.
 
@@ -27,33 +27,42 @@ The app controls how long it retains values received from DataStore. For example
 Android 8.0. is the minimal supported version.
 
 
-You can use Better Encrypted DataStore as usual DataStore. 
+In `settings.gradle.kts`, add JitPack to your dependency repositories alongside Google Maven and Maven Central.
 
-Add jitpack repository to settings.gradle.kts
-
+```kotlin
+dependencyResolutionManagement {
     repositories {
+        google()
+        mavenCentral()
         maven { url = uri("https://jitpack.io") }
     }
+}
+```
 
-And add this dependency to your build.gradle.kts:
+Add the dependency to your module's `build.gradle.kts`.
 
-`implementation 'com.github.bakad3v:BetterEncryptedDatastore:1.1.3.0'`
+```kotlin
+dependencies {
+    implementation("com.github.bakad3v:BetterEncryptedDatastore:1.1.3.0")
+}
+```
 
-And use extension function encryptedDataStore as the usual Datastore.
+Declare the delegate once per file at the top level. The delegates support access from a single process.
 
-`private val Context.exampleDatastore by encryptedDataStore(NAME, ExampleSerializer())
-val data = context.exampleDatastore.data`
+```kotlin
+private val Context.exampleDatastore by encryptedDataStore(NAME, ExampleSerializer())
+```
 
-You can also specify additional parameters:
+Use `context.exampleDatastore.data` and `context.exampleDatastore.updateData` as with AndroidX DataStore.
 
-alias - logical encryption alias. It defaults to the DataStore file name. New writes use AES-GCM
-with the Keystore alias `<alias>.bedatastore-gcm-v1`. Existing AES-CBC files use their original key
-and are readable. A write that changes their value saves it in the new format.
+- `alias` defaults to the file name. New writes use AES-GCM with the Android Keystore alias `<alias>.bedatastore-gcm-v1`. Existing files written by the library with AES-CBC can still be read with the original alias and key. An update that changes their value writes the new format, which requires a version of the library that supports AES-GCM.
+- `isDBA` defaults to `false`. Set it to `true` to use device-protected storage. To access the store before the first unlock, use an app component declared with `android:directBootAware="true"`. Encrypted reads also require the corresponding Keystore key to be available. [Android Direct Boot guide](https://developer.android.com/privacy-and-security/direct-boot)
 
-isDBA: Boolean - is Datastore file stored in device protected storage. By default - false.
+Use `dataStoreDBA` for device-protected storage without the library's additional encryption.
 
-If you want to store unencrypted data in device protected storage, you can use another extension function dataStoreDBA.
-`private val Context.dbaDatastore by dataStoreDBA(DBA_NAME, DBASerializer())`
+```kotlin
+private val Context.dbaDatastore by dataStoreDBA(DBA_NAME, DBASerializer())
+```
 
 ## Examples
 This library is used for storing data in my open-source app [Android Antiforensic Tools](https://github.com/bakad3v/Android-AntiForensic-Tools).
@@ -65,6 +74,10 @@ This library is used for storing data in my open-source app [Android Antiforensi
 - `./gradlew :bedatastore:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sonozaki.bedatastore.recovery.DataStoreProcessRecoveryTest` runs only the process recovery tests. They kill a worker in the test APK during reading, writing, or migration and verify the encrypted file from a fresh store while the device stays on. The JVM tests model storage faults separately with partial reads, failed writes, and truncated ciphertext.
 
 The adapted test files identify their upstream sources and retain the [AndroidX license](bedatastore/src/test/ANDROIDX-LICENSE).
+
+CI runs after a pull request is merged into `master`. To run it manually, open **Actions**, select **CI**, and choose **Run workflow**. CI runs JVM tests, release lint, the Maven publication build, and instrumentation tests on API 26 and 35 emulators. The workflow run includes the Maven package and test reports.
+
+To publish on JitPack, wait for CI to pass on `master` and push a tag on the exact commit that passed. Use the publication version in `bedatastore/build.gradle.kts` as the tag name. JitPack builds the Maven package from that tag using `jitpack.yml`.
 
 ### Performance benchmarks
 
