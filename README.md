@@ -77,7 +77,9 @@ The adapted test files identify their upstream sources and retain the [AndroidX 
 
 CI runs after a pull request is merged into `master`. To run it manually, open **Actions**, select **CI**, and choose **Run workflow**. CI runs JVM tests, release lint, the Maven publication build, and instrumentation tests on API 26 and 35 emulators. The workflow run includes the Maven package and test reports.
 
-To publish on JitPack, wait for CI to pass on `master` and push a tag on the exact commit that passed. Use the publication version in `bedatastore/build.gradle.kts` as the tag name. JitPack builds the Maven package from that tag using `jitpack.yml`.
+After the checks pass on a merge into `master`, CI tags the tested commit with the Maven publication version and requests the JitPack build. For a manual release, select `master` and enable **publish** when starting CI. JitPack builds the Maven package from the tag using `jitpack.yml`.
+
+Set a new publication version in `bedatastore/build.gradle.kts` before merging the next release. If that version already has a tag on another commit, CI leaves it in place. If the JitPack request fails after tagging, rerun the original workflow to retry the same version.
 
 ### Performance benchmarks
 
