@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 rootProject.name = "Better Encrypted Datastore"
 include(":app")
 include(":bedatastore")
+include(":benchmark")

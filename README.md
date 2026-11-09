@@ -1,52 +1,102 @@
 # Better Encrypted Datastore
-Better Encrypted Datastore is a library for securely storing encrypted data inside Datastore. It allows you to combine strong encryption with the convenience of reactive programming. In addition, the library extends Datastore's capabilities by adding the ability to store a Datastore file in device encrypted storage, making data from it accessible before the first device unlock.
-
-## Comparison with existing analogues
-Existing libraries for encrypting data inside a Datastore, such as [Encrypted DataStore](https://github.com/osipxd/encrypted-datastore), are limited to only encrypting the file where the data is stored. However, DataStore is designed in such a way that the data is stored in a cache in RAM after it is initially loaded from the file, rather than being read from the file each time the data is accessed. In existing libraries, the values in this cache are not encrypted. Furthermore, Datastore is implemented as a singleton, which means that this decrypted data will be in RAM the entire time the application is running.
+Better Encrypted Datastore adds encryption and optional device-protected storage to AndroidX DataStore 1.1.3. It exposes the `DataStore<T>` interface and requires Android 8.0 (API 26) or later.
 
 On screenshots below you can see that unencrypted data remains in RAM long time after user put application in background.
 
-![Image](./images/encrypted_datastore_value.png)
-![Image](./images/encrypted_datastore_path.png)
+![Decoded Settings value in the heap](./images/encrypted_datastore_value.png)
 
-This design protects from some attacks, but opens the door for attackers to perform an attack by extracting data from a RAM dump. Although difficult due to code obfuscation, this attack has already [shown to be effective](https://cellebrite.com/en/decrypting-databases-using-ram-dump-health-data/) against encrypted databases. In addition, on some devices, RAM dumps can be obtained even without root privileges.
+![Reference from the AndroidX DataStore cache to Settings](./images/encrypted_datastore_path.png)
 
-In my library, not only the DataStore file is encrypted, but also the cache. It adds a separate cache on top of the existing DataStore cache to store decrypted data. This cache will be filled with values at the first subscription to the data stream and overwritten with an empty value when all subscribers unsubscribe from the data stream. Thus, decrypted data will not be stored in RAM longer than necessary for user.
+Better Encrypted Datastore keeps ciphertext in the file and in the underlying AndroidX DataStore cache. It uses a separate cache to share the decrypted value among active collectors of `data`. When the last collector finishes or is cancelled, the library drops the cache's reference to the decrypted value. An `updateData` call without active collectors uses plaintext during the operation and leaves the decrypted cache empty.
 
-On screenshots below you can see that no actual data remains in RAM when user put app in background - only default values. 
+On screenshots below you can see that no references to the actual data remains in RAM when user put app in background and after garbage collector run - only default values. 
 
-![Image](./images/bedatastore_value1.png)
-![Image](./images/bedatastore_path1.png)
-![Image](./images/bedatastore_value2.png)
-![Image](./images/bedatastore_path2.png)
-
-My library also provides possibility to store encrypted and unencrypted data in device protected storage. That makes data from datastore accessible before first unlock.
+![Default ExampleData value held by the serializer](./images/bedatastore_value1.png)
+![Reference from the serializer to its default value](./images/bedatastore_path1.png)
+![Initial ExampleData value held by the ViewModel](./images/bedatastore_value2.png)
+![Reference from the ViewModel's StateFlow to its initial value](./images/bedatastore_path2.png)
 
 ## Limitations
 
-Better Encrypted Datastore prevents upstream data leakage, but cannot prevent downstream leakage, such as in the presentation layer. It is up to you to take care of data security after it leaves the DataStore. For example, if you want to expose data flow as StateFlow in ViewModel, it is recommended to use the SharingStarted.WhileSubscribed() strategy with replayExpirationMillis parameter specified. This parameter configures a delay (in milliseconds) between the stopping of the sharing coroutine and the resetting of the replay cache.
+Plaintext can appear in memory during reads, writes, and migrations, and the decrypted cache can stay populated as long as a collector is active. Moving the app to the background only releases the cache if collection stops. Once all references to a value are gone, the runtime can reclaim it during garbage collection. The timing is up to the runtime, and residual bytes can remain in process memory even after the object is reclaimed.
+
+The app controls how long it retains values received from DataStore. For example, a ViewModel that uses `stateIn` can use `SharingStarted.WhileSubscribed(replayExpirationMillis = 0)` to reset its `StateFlow` to the initial value as soon as sharing stops. `stopTimeoutMillis` controls how long sharing continues after the last subscriber leaves. Any references held elsewhere in the app have their own lifetime.
 
 ## Usage
-You can use Better Encrypted DataStore as usual DataStore. Just add this to your build.gradle:
 
-`implementation 'com.github.bakad3v:BetterEncryptedDatastore:1.0.0-alpha'`
+Android 8.0. is the minimal supported version.
 
-And use extension function encryptedDataStore as the usual Datastore.
 
-`private val Context.exampleDatastore by encryptedDataStore(NAME, ExampleSerializer())
-val data = context.exampleDatastore.data`
+In `settings.gradle.kts`, add JitPack to your dependency repositories alongside Google Maven and Maven Central.
 
-You can also specify additional parameters:
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+    }
+}
+```
 
-alias - encryption alias. By default - the name of the Datastore file.
+Add the dependency to your module's `build.gradle.kts`.
 
-isDBA: Boolean - is Datastore file stored in device protected storage. By default - false.
+```kotlin
+dependencies {
+    implementation("com.github.bakad3v:BetterEncryptedDatastore:1.1.3.0")
+}
+```
 
-If you want to store unencrypted data in device protected storage, you can use another extension function dataStoreDBA.
-`private val Context.dbaDatastore by dataStoreDBA(DBA_NAME, DBASerializer())`
+Declare the delegate once per file at the top level. The delegates support access from a single process.
+
+```kotlin
+private val Context.exampleDatastore by encryptedDataStore(NAME, ExampleSerializer())
+```
+
+Use `context.exampleDatastore.data` and `context.exampleDatastore.updateData` as with AndroidX DataStore.
+
+- `alias` defaults to the file name. New writes use AES-GCM with the Android Keystore alias `<alias>.bedatastore-gcm-v1`. Existing files written by the library with AES-CBC can still be read with the original alias and key. An update that changes their value writes the new format, which requires a version of the library that supports AES-GCM.
+- `isDBA` defaults to `false`. Set it to `true` to use device-protected storage. To access the store before the first unlock, use an app component declared with `android:directBootAware="true"`. Encrypted reads also require the corresponding Keystore key to be available. [Android Direct Boot guide](https://developer.android.com/privacy-and-security/direct-boot)
+
+Use `dataStoreDBA` for device-protected storage without the library's additional encryption.
+
+```kotlin
+private val Context.dbaDatastore by dataStoreDBA(DBA_NAME, DBASerializer())
+```
 
 ## Examples
 This library is used for storing data in my open-source app [Android Antiforensic Tools](https://github.com/bakad3v/Android-AntiForensic-Tools).
+
+## Tests
+
+- `./gradlew :bedatastore:testDebugUnitTest` runs the adapted AndroidX DataStore 1.1.3 contract and migration scenarios, plus tests for cache lifetime and failure handling. The JVM suite uses real files and a test encryption provider.
+- `./gradlew :bedatastore:connectedDebugAndroidTest` runs the Android Keystore and process recovery tests on a connected device or emulator.
+- `./gradlew :bedatastore:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.sonozaki.bedatastore.recovery.DataStoreProcessRecoveryTest` runs only the process recovery tests. They kill a worker in the test APK during reading, writing, or migration and verify the encrypted file from a fresh store while the device stays on. The JVM tests model storage faults separately with partial reads, failed writes, and truncated ciphertext.
+
+The adapted test files identify their upstream sources and retain the [AndroidX license](bedatastore/src/test/ANDROIDX-LICENSE).
+
+CI runs after a pull request is merged into `master`. To run it manually, open **Actions**, select **CI**, and choose **Run workflow**. CI runs JVM tests, release lint, the Maven publication build, and instrumentation tests on API 26 and 35 emulators. The workflow run includes the Maven package and test reports.
+
+To publish on JitPack, wait for CI to pass on `master` and push a tag on the exact commit that passed. Use the publication version in `bedatastore/build.gradle.kts` as the tag name. JitPack builds the Maven package from that tag using `jitpack.yml`.
+
+### Performance benchmarks
+
+Run on a physical Android device with `./gradlew :benchmark:connectedReleaseAndroidTest`.
+The suite compares `DataStoreBenchmark` (the public encrypted delegate with Android Keystore)
+with `AndroidXDataStoreBenchmark` (stock AndroidX DataStore with `OkioStorage`). Both use the same
+serializer, payloads, storage directory, and coroutine dispatcher. Each scenario runs with
+payloads of 64 B, 4 KiB, 64 KiB, and 1 MiB:
+
+- `coldRead` measures `data.first()` on a fresh DataStore instance with an existing file. The OS file cache is left in place.
+- `warmReadWithoutCollectors` measures one-shot reads after priming the AndroidX cache. That cache holds ciphertext for the encrypted delegate and the decoded value for stock AndroidX.
+- `hotReadWithCollector` measures one-shot reads with a separate active collector. For the encrypted delegate, the collector keeps the decrypted value cached.
+- `updateAndCommit` alternates between two equal-size values and measures `updateData` through the file commit, with no active collectors.
+
+File seeding, payload generation, store setup and shutdown, and result checks run outside the
+timed section. The JSON report in `benchmark/build/outputs/connected_android_test_additional_output/`
+includes timing samples and device details. Compare results on the same device and build type.
+To run only stock AndroidX, add
+`-Pandroid.testInstrumentationRunnerArguments.class=com.sonozaki.bedatastore.benchmark.AndroidXDataStoreBenchmark`.
 
 ## Donate
 You can support me using crypto.
@@ -57,4 +107,4 @@ LTC: ltc1qtfhun6yzt0qlpa9d6s8gr2yd70sg0kx755u3se
 
 BTC: bc1qn9a9eyy2vgrz8yvhk0654d63dt56pxhpn6q4xl
 
-BTC lightning: dualwhorl66@walletofsatoshi.com
+USDT (TRC20), TRON: TUCrXnNRXgMccuvGF5cCrNuNJTg4uDvBbZ

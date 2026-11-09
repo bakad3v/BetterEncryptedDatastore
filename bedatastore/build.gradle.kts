@@ -1,3 +1,5 @@
+import org.gradle.jvm.tasks.Jar
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -37,6 +39,14 @@ dependencies {
     api(libs.datastore.core.android)
     api(libs.datastore.preferences)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+}
+
+// Android and Kotlin both include src/main/java in the published sources.
+tasks.withType<Jar>().matching { it.name == "releaseSourcesJar" }.configureEach {
+    eachFile { duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
 }
 
 publishing {
@@ -44,7 +54,7 @@ publishing {
         create("release", MavenPublication::class) {
             groupId = "com.github.bakad3v"
             artifactId = "bedatastore"
-            version = "1.1.0-alpha"
+            version = "1.1.3.0"
 
             afterEvaluate {
                 from(components["release"])
